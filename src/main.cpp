@@ -4,9 +4,19 @@
 #include <Adafruit_SHT31.h>
 #include <TFT_eSPI.h>
 #include <freertos/FreeRTOS.h>
+#include "UbidotsConnection.h"
 
 #define NUM_READINGS 100
 #define AVERAGE_READINGS 10
+
+/* Ubidots Config */
+#define UBIDOTS_TOKEN " "
+#define UBIDOTS_DEVICE "esp32_device"
+#define UBIDOTS_URL "industrial.api.ubidots.com"
+#define UBIDOTS_PORT "80"
+
+#define EXAMPLE_ESP_WIFI_SSID "UPBWiFi"
+#define EXAMPLE_ESP_WIFI_PASS ""
 
 // P21 - SDA
 // P22 - SCL
@@ -14,12 +24,13 @@
 const int buttonPin = 35; // gpio integrado
 const int ledPin = 27;    // Pin del LED
 
-
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 TFT_eSPI tft = TFT_eSPI();
 
 float temperatureReadings[NUM_READINGS];
 float humidityReadings[NUM_READINGS];
+float globalTemperatureavg = 0.0;
+float globalHumidityavg = 0.0;
 int readingIndex = 0;
 
 SemaphoreHandle_t xMutex;
@@ -29,11 +40,14 @@ TaskHandle_t ledTaskHandle = NULL; // Manejador para la tarea del LED
 
 int blinkPeriod = 2000; // Periodo de parpadeo incial en milisegundos
 
+UbidotsConnection ubidots("API_KEY"); // coloco mi api de ubidots
+
 // Prototipos de las tareas
 void readSensorTask(void *pvParameters);
 void updateDisplayTask(void *pvParameters);
 void commandProcessingTask(void *pvParameters);
 void ledBlinkTask(void *pvParameters);
+void sendUbidotsDataTask(void *pvParameters);
 
 // Inicializar tareas
 void initializeTasks()
@@ -41,8 +55,8 @@ void initializeTasks()
   xTaskCreate(readSensorTask, "ReadSensorTask", 2048, NULL, 1, NULL);
   xTaskCreate(updateDisplayTask, "UpdateDisplayTask", 2048, NULL, 2, NULL);
   xTaskCreate(commandProcessingTask, "CommandProcessingTask", 2048, NULL, 3, NULL);
+  xTaskCreate(sendUbidotsDataTask, "SendUbidotsDataTask", 2048, NULL, 3, NULL);
 }
-
 
 void readSensorTask(void *pvParameters)
 {
@@ -78,7 +92,6 @@ void readSensorTask(void *pvParameters)
   }
 }
 
-
 void updateDisplayTask(void *pvParameters)
 {
   while (true)
@@ -107,7 +120,6 @@ void updateDisplayTask(void *pvParameters)
   }
 }
 
-
 void commandProcessingTask(void *pvParameters)
 {
   while (true)
@@ -129,6 +141,8 @@ void commandProcessingTask(void *pvParameters)
             int index = (readingIndex - 1 - i + NUM_READINGS) % NUM_READINGS;
             avgTemperature += temperatureReadings[index];
             avgHumidity += humidityReadings[index];
+            globalTemperatureavg = avgTemperature;
+            globalHumidityavg = avgHumidity;
             count++;
           }
           avgTemperature /= count;
@@ -213,7 +227,6 @@ void commandProcessingTask(void *pvParameters)
   }
 }
 
-
 void ledBlinkTask(void *pvParameters)
 {
   while (true)
@@ -232,8 +245,34 @@ void ledBlinkTask(void *pvParameters)
     }
   }
 }
+void sendUbidotsDataTask(void *pvParameters)
+{
+  while (true)
+  {
 
-//Pulsador
+    if (ubidots.sendData(UBIDOTS_DEVICE, "temperature", globalTemperatureavg))
+    {
+      Serial.println("Temperature data sent successfully");
+    }
+    else
+    {
+      Serial.println("Failed to send temperature data");
+    }
+
+    if (ubidots.sendData(UBIDOTS_DEVICE, "humidity", globalHumidityavg))
+    {
+      Serial.println("Humidity data sent successfully");
+    }
+    else
+    {
+      Serial.println("Failed to send humidity data");
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10000));
+  }
+}
+
+// Pulsador
 void IRAM_ATTR handleButtonPress()
 {
   ledState = !ledState;
@@ -253,6 +292,13 @@ void IRAM_ATTR handleButtonPress()
 void setup()
 {
   Serial.begin(115200);
+  WiFi.begin(EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(1000);
+    Serial.println("Conectando a Wifi");
+  }
+  Serial.println("Conectado a wifi");
   if (!sht31.begin(0x44))
   {
     Serial.println("No se pudo encontrar un sensor SHT30.");
